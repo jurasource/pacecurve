@@ -1,4 +1,10 @@
 requests
 beautifulsoup4
 tqdm
-playwright
+pandas
+numpy
+scikit-learn
+scipy
+plotly
+streamlit
+joblib
