@@ -16,9 +16,10 @@ WINDOW_COLS = [f"window_{i}" for i in range(N_WINDOWS)]
 
 
 def _impute_nan_cols(X: np.ndarray, col_means: np.ndarray) -> np.ndarray:
-    """Replace NaN entries in X with the corresponding column mean in-place."""
+    """Replace NaN entries in X with the corresponding column mean."""
     nan_mask = np.isnan(X)
     if nan_mask.any():
+        X = X.copy()
         X[nan_mask] = np.take(col_means, np.where(nan_mask)[1])
     return X
 
