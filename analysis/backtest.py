@@ -1,7 +1,7 @@
 import numpy as np
 import pandas as pd
 
-from analysis.data import get_all_laps, get_connection
+from analysis.data import get_all_laps
 from analysis.features import build_feature_matrix, normalise_features
 from analysis.predictor import Predictor
 from analysis.profiles import PaceProfiler
@@ -69,10 +69,7 @@ def run_loyo_backtest(
                 if partial.empty:
                     continue
 
-                laps_in = [
-                    {"lap_number": int(r["lap_number"]), "split_time_sec": int(r["split_time_sec"])}
-                    for _, r in partial.iterrows()
-                ]
+                laps_in = partial[["lap_number", "split_time_sec"]].astype(int).to_dict("records")
                 result = predictor.predict(laps_in)
                 pred_km = result["predicted_km"]
                 if pred_km is None:
@@ -163,9 +160,9 @@ def attach_confidence_bounds(
         subset = backtest_df[
             (backtest_df["obs_hours"] >= min_h) & (backtest_df["obs_hours"] < max_h)
         ]
-        if len(subset) >= 5:
+        if len(subset) >= 5:  # need at least 5 samples for meaningful quantiles
             bounds[w] = [subset["error_km"].quantile(0.10), subset["error_km"].quantile(0.90)]
         else:
-            bounds[w] = [-20.0, 20.0]  # fallback wide interval
+            bounds[w] = [-20.0, 20.0]  # ±20 km wide fallback when too few samples
 
     profiler.confidence_bounds_ = bounds

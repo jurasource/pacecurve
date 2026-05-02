@@ -6,12 +6,9 @@ import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
-from sklearn.cluster import KMeans
-from sklearn.decomposition import PCA
 
 from app.cache import load_feature_matrix, load_profiler
-from analysis.features import N_WINDOWS
-from analysis.profiles import WINDOW_COLS
+from analysis.features import N_WINDOWS, WINDOW_COLS, WINDOW_MIDPOINT_HOURS
 from analysis.profiles import PaceProfiler, select_n_clusters
 
 st.title("Pace/Fatigue Profiles")
@@ -34,15 +31,13 @@ else:
 
 # Profile curves chart
 st.subheader("Pace Profile Curves (normalised)")
-hours = [(i + 0.5) * 0.5 for i in range(N_WINDOWS)]
-
 fig1 = go.Figure()
 colors = ["#e41a1c", "#377eb8", "#4daf4a", "#984ea3", "#ff7f00"]
 for k in range(display_profiler.n_clusters_):
     label = display_profiler.profile_labels_[k]
     curve = display_profiler.profile_curves_[k]
     fig1.add_trace(go.Scatter(
-        x=hours,
+        x=WINDOW_MIDPOINT_HOURS,
         y=curve,
         mode="lines",
         name=label,

@@ -1,18 +1,36 @@
 import numpy as np
+import pandas as pd
 
-from analysis.features import RACE_SEC, WINDOW_SEC, get_partial_feature_vector
+from analysis.features import (
+    KM_TO_MILES,
+    LAP_KM,
+    N_WINDOWS,
+    RACE_SEC,
+    WINDOW_COLS,
+    WINDOW_MIDPOINT_HOURS,
+    get_partial_feature_vector,
+)
 from analysis.profiles import PaceProfiler
 
-# Fewer than this many observed windows → use constant-pace tier 1 fallback
+# Fewer than this many observed windows → constant-pace tier-1 fallback.
+# 6 windows = 3 hours of data; below this, profile fitting is unreliable.
 TIER2_MIN_WINDOWS = 6
+
+# Tier-1 CI: ±20% — wide because constant-pace assumption degrades quickly.
+_TIER1_CI_LOW = 0.80
+_TIER1_CI_HIGH = 1.20
+
+# Tier-2 fallback CI when no backtest bounds are stored: ±15%.
+_TIER2_CI_LOW = 0.85
+_TIER2_CI_HIGH = 1.15
 
 
 class Predictor:
     """
     Predicts final 24h race distance from partial lap data.
 
-    Tier 1 (<6 windows observed): constant-pace extrapolation.
-    Tier 2 (>=6 windows): PCA completion via PaceProfiler.
+    Tier 1 (<TIER2_MIN_WINDOWS windows observed): constant-pace extrapolation.
+    Tier 2 (>=TIER2_MIN_WINDOWS windows): profile-matching via PaceProfiler.
     """
 
     def __init__(self, profiler: PaceProfiler) -> None:
@@ -25,50 +43,36 @@ class Predictor:
         laps_observed: list of {'lap_number': int, 'split_time_sec': int/float}
 
         Returns dict with:
-            predicted_km, predicted_laps, confidence_interval (km tuple),
-            profile_label, hours_observed, tier.
+            predicted_km, predicted_miles, predicted_laps,
+            confidence_interval_km, profile_label, hours_observed, tier.
         """
         if not laps_observed:
             return self._empty_result()
 
-        vector, mean_pace = get_partial_feature_vector(laps_observed)
+        vector, mean_pace, elapsed_sec = get_partial_feature_vector(laps_observed)
         obs_windows = int(np.sum(~np.isnan(vector)))
-        splits = np.array([float(l["split_time_sec"]) for l in laps_observed])
-        elapsed_sec = float(np.sum(splits))
         hours_observed = elapsed_sec / 3600.0
 
         if obs_windows < TIER2_MIN_WINDOWS:
-            # Tier 1: constant pace
             laps_so_far = len(laps_observed)
             pace = elapsed_sec / laps_so_far if laps_so_far > 0 else 300.0
-            predicted_laps = RACE_SEC / pace
-            predicted_km = predicted_laps * 0.4
+            predicted_km = (RACE_SEC / pace) * LAP_KM
             tier = 1
             profile_label = "Unknown"
-            # Wide CI for tier 1 (±20% of prediction)
-            ci = (predicted_km * 0.80, predicted_km * 1.20)
+            ci = (predicted_km * _TIER1_CI_LOW, predicted_km * _TIER1_CI_HIGH)
         else:
-            # Tier 2: PCA completion
-            norm_vector = vector / mean_pace  # relative (normalised) form
+            norm_vector = vector / mean_pace
             predicted_km = self.profiler.predict_distance(norm_vector, mean_pace)
-            predicted_laps = predicted_km / 0.4
             tier = 2
 
-            # Profile label via cluster assignment on the observed windows
-            import pandas as pd
-            from analysis.features import N_WINDOWS
-            from analysis.profiles import WINDOW_COLS
-            # Build a single-row feature df for assignment
-            row = {f"window_{i}": vector[i] for i in range(N_WINDOWS)}
-            row_norm = {f"window_{i}": norm_vector[i] for i in range(N_WINDOWS)}
-            feat_series = pd.DataFrame([row_norm])
-            feat_series.index = pd.MultiIndex.from_tuples(
+            norm_df = pd.DataFrame([norm_vector], columns=WINDOW_COLS)
+            norm_df.index = pd.MultiIndex.from_tuples(
                 [(0, "live")], names=["event_id", "pid"]
             )
-            profile_label = self.profiler.assign(feat_series).iloc[0]
-
-            # Confidence interval from stored bounds if available, else ±15%
+            profile_label = self.profiler.assign(norm_df).iloc[0]
             ci = self._confidence_interval(predicted_km, obs_windows)
+
+        predicted_laps = predicted_km / LAP_KM
 
         if verbose:
             print(
@@ -78,7 +82,7 @@ class Predictor:
 
         return {
             "predicted_km": round(predicted_km, 2),
-            "predicted_miles": round(predicted_km * 0.621371, 2),
+            "predicted_miles": round(predicted_km * KM_TO_MILES, 2),
             "predicted_laps": int(round(predicted_laps)),
             "confidence_interval_km": (round(ci[0], 1), round(ci[1], 1)),
             "profile_label": profile_label,
@@ -91,26 +95,24 @@ class Predictor:
         Returns observed and predicted pace trajectories for charting.
 
         Returns dict with:
-            hours: x-axis values (midpoint of each 30-min window, 0..24h)
+            hours: midpoint hour of each 30-min window (0..24h)
             observed_pace: sec/lap, NaN for future windows
-            predicted_pace: sec/lap, full 48 windows
+            predicted_pace: sec/lap, full N_WINDOWS windows
         """
         if not laps_observed:
-            hours = [(i + 0.5) * WINDOW_SEC / 3600 for i in range(48)]
             return {
-                "hours": hours,
-                "observed_pace": [np.nan] * 48,
-                "predicted_pace": [np.nan] * 48,
+                "hours": WINDOW_MIDPOINT_HOURS,
+                "observed_pace": [np.nan] * N_WINDOWS,
+                "predicted_pace": [np.nan] * N_WINDOWS,
             }
 
-        vector, mean_pace = get_partial_feature_vector(laps_observed)
+        vector, mean_pace, _ = get_partial_feature_vector(laps_observed)
         norm_vector = vector / mean_pace if mean_pace > 0 else vector
 
         observed_abs, full_abs = self.profiler.predict_trajectory(norm_vector, mean_pace)
 
-        hours = [(i + 0.5) * WINDOW_SEC / 3600 for i in range(48)]
         return {
-            "hours": hours,
+            "hours": WINDOW_MIDPOINT_HOURS,
             "observed_pace": observed_abs.tolist(),
             "predicted_pace": full_abs.tolist(),
         }
@@ -124,8 +126,7 @@ class Predictor:
         ):
             p10, p90 = self.profiler.confidence_bounds_[obs_windows]
             return (predicted_km + p10, predicted_km + p90)
-        # Fallback: ±15%
-        return (predicted_km * 0.85, predicted_km * 1.15)
+        return (predicted_km * _TIER2_CI_LOW, predicted_km * _TIER2_CI_HIGH)
 
     @staticmethod
     def _empty_result() -> dict:

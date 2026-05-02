@@ -219,3 +219,5 @@ __marimo__/
 
 .claude
 *.db
+*.db-shm
+*.db-wal

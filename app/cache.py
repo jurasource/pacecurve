@@ -28,9 +28,11 @@ def load_all_laps():
 
 @st.cache_data
 def load_feature_matrix():
+    from analysis.data import get_all_laps
     from analysis.features import build_feature_matrix, normalise_features
-    laps = load_all_laps()
-    feat = build_feature_matrix(laps[laps["status"].isna() | (laps["status"] != "*")])
+    conn = get_db()
+    laps_no_dnf = get_all_laps(conn, exclude_dnf=True)
+    feat = build_feature_matrix(laps_no_dnf)
     norm = normalise_features(feat)
     return feat, norm
 

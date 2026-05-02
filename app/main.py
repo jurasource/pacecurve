@@ -13,12 +13,15 @@ st.set_page_config(
 )
 
 pages = {
+    "": [
+        st.Page("pages/00_home.py", title="Overview", icon="🏠"),
+    ],
     "Explore": [
         st.Page("pages/01_explore.py", title="Historical Data", icon="📊"),
         st.Page("pages/02_profiles.py", title="Pace Profiles", icon="📈"),
         st.Page("pages/03_backtest.py", title="Backtesting", icon="✅"),
         st.Page("pages/04_predict.py", title="Predict", icon="🎯"),
-    ]
+    ],
 }
 
 pg = st.navigation(pages)

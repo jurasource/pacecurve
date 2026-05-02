@@ -7,8 +7,8 @@ import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
 
-from app.cache import get_db, load_all_laps, load_feature_matrix, load_profiler
-from analysis.data import get_participants
+from app.cache import load_all_laps, load_feature_matrix, load_profiler
+from analysis.features import DNF_STATUS, N_WINDOWS, WINDOW_MIDPOINT_HOURS
 
 st.title("Historical Data Explorer")
 
@@ -32,28 +32,24 @@ filtered_laps = laps[laps["year"].isin(selected_years)]
 if selected_genders:
     filtered_laps = filtered_laps[filtered_laps["gender"].isin(selected_genders)]
 if not show_dnf:
-    filtered_laps = filtered_laps[filtered_laps["status"].isna() | (filtered_laps["status"] != "*")]
+    filtered_laps = filtered_laps[filtered_laps["status"].isna() | (filtered_laps["status"] != DNF_STATUS)]
 
-# Summary stats
+# Summary stats — computed from laps already in memory, no extra DB call
 st.subheader("Summary")
-conn = get_db()
-participants = get_participants(conn)
-participants["distance_km"] = pd.to_numeric(participants["distance_km"], errors="coerce")
-
 summary_rows = []
 for year in selected_years:
-    year_laps = filtered_laps[filtered_laps["year"] == year]
-    year_parts = participants[participants["event_id"].isin(year_laps["event_id"].unique())]
-    year_parts_filtered = year_parts[year_parts["gender"].isin(selected_genders)] if selected_genders else year_parts
-    if not show_dnf:
-        year_parts_filtered = year_parts_filtered[year_parts_filtered["status"].isna() | (year_parts_filtered["status"] != "*")]
-    dist = pd.to_numeric(year_parts_filtered["distance_km"], errors="coerce").dropna()
+    year_runners = (
+        filtered_laps[filtered_laps["year"] == year]
+        .groupby("pid")["final_distance_km"]
+        .first()
+        .dropna()
+    )
     summary_rows.append({
         "Year": year,
-        "Runners": len(dist),
-        "Avg distance (km)": f"{dist.mean():.1f}" if len(dist) else "-",
-        "Winner (km)": f"{dist.max():.1f}" if len(dist) else "-",
-        "Min (km)": f"{dist.min():.1f}" if len(dist) else "-",
+        "Runners": len(year_runners),
+        "Avg distance (km)": f"{year_runners.mean():.1f}" if len(year_runners) else "-",
+        "Winner (km)": f"{year_runners.max():.1f}" if len(year_runners) else "-",
+        "Min (km)": f"{year_runners.min():.1f}" if len(year_runners) else "-",
     })
 st.dataframe(pd.DataFrame(summary_rows), hide_index=True)
 
@@ -88,8 +84,7 @@ for label in selected_runners:
     if runner_laps.empty:
         continue
 
-    elapsed_sec = runner_laps["split_time_sec"].cumsum()
-    elapsed_hours = elapsed_sec / 3600
+    elapsed_hours = runner_laps["split_time_sec"].cumsum() / 3600
     pace = runner_laps["split_time_sec"].rolling(smoothing, min_periods=1).mean()
 
     fig.add_trace(go.Scatter(
@@ -101,29 +96,26 @@ for label in selected_runners:
     ))
 
 if show_profile and selected_runners:
-    assignments = profiler.assign(norm)
-    for label in selected_runners[:1]:
-        row = runner_options[runner_options["label"] == label].iloc[0]
-        idx = (int(row["event_id"]) if "event_id" in row else None, row["pid"] if "pid" in row else None)
-        # Use year + name to find event_id/pid
-        yr, nm = int(row["year"]), row["name"]
-        match = filtered_laps[(filtered_laps["year"] == yr) & (filtered_laps["name"] == nm)]
-        if not match.empty:
-            eid = match["event_id"].iloc[0]
-            pid = match["pid"].iloc[0]
-            key = (eid, pid)
-            if key in assignments.index:
-                profile_name = assignments[key]
-                profile_idx = profiler.profile_labels_.index(profile_name)
-                curve = profiler.profile_curves_[profile_idx]
-                runner_mean_pace = match["split_time_sec"].mean()
-                abs_curve = curve * runner_mean_pace
-                hours = [(i + 0.5) * 0.5 for i in range(48)]
-                fig.add_trace(go.Scatter(
-                    x=hours, y=abs_curve,
-                    mode="lines", name=f"{profile_name} profile",
-                    line=dict(dash="dash", width=2, color="black"),
-                ))
+    row = runner_options[runner_options["label"] == selected_runners[0]].iloc[0]
+    yr, nm = int(row["year"]), row["name"]
+    match = filtered_laps[(filtered_laps["year"] == yr) & (filtered_laps["name"] == nm)]
+    if not match.empty:
+        eid = match["event_id"].iloc[0]
+        pid = match["pid"].iloc[0]
+        key = (eid, pid)
+        if key in norm.index:
+            # Assign only this one runner, not the entire 181-row matrix
+            profile_name = profiler.assign(norm.loc[[key]]).iloc[0]
+            profile_idx = profiler.profile_labels_.index(profile_name)
+            curve = profiler.profile_curves_[profile_idx]
+            runner_mean_pace = match["split_time_sec"].mean()
+            fig.add_trace(go.Scatter(
+                x=WINDOW_MIDPOINT_HOURS,
+                y=curve * runner_mean_pace,
+                mode="lines",
+                name=f"{profile_name} profile",
+                line=dict(dash="dash", width=2, color="black"),
+            ))
 
 fig.update_layout(
     xaxis_title="Elapsed time (hours)",
@@ -139,7 +131,7 @@ st.subheader("Early Pace vs Final Distance")
 _sorted = filtered_laps.sort_values(["year", "name", "lap_number"])
 _early = (
     _sorted.groupby(["year", "name"])["split_time_sec"]
-    .apply(lambda s: s.iloc[:20].mean())
+    .apply(lambda s: s.iloc[:20].mean())  # first 20 laps ≈ first ~8 minutes
     .rename("early_pace")
     .reset_index()
 )
