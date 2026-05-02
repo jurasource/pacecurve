@@ -15,6 +15,7 @@ st.set_page_config(
 pages = {
     "": [
         st.Page("pages/00_home.py", title="Overview", icon="🏠"),
+        st.Page("pages/05_contact.py", title="Contact", icon="✉️"),
     ],
     "Explore": [
         st.Page("pages/01_explore.py", title="Historical Data", icon="📊"),

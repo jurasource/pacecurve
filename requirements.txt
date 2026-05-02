@@ -8,3 +8,4 @@ scipy
 plotly
 streamlit
 joblib
+resend
