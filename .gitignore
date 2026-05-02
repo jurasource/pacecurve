@@ -218,6 +218,5 @@ __marimo__/
 .streamlit/secrets.toml
 
 .claude
-*.db
 *.db-shm
 *.db-wal
