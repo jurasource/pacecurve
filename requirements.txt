@@ -5,7 +5,7 @@ beautifulsoup4
 tqdm
 pandas
 numpy
-scikit-learn
+scikit-learn==1.7.2
 scipy
 plotly
 streamlit
